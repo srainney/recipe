@@ -8,10 +8,10 @@ export class RecipeParser {
       title: /^(.+?)(?:\n|$)/m,
       macros: {
         calories: /(?:calories?|kcal)[:\s]*(\d+(?:\.\d+)?)/i,
-        protein: /protein[:\s]*(\d+(?:\.\d+)?)\s*g/i,
-        carbs: /(?:carbs?|carbohydrates?)[:\s]*(\d+(?:\.\d+)?)\s*g/i,
-        fat: /fat[:\s]*(\d+(?:\.\d+)?)\s*g/i,
-        fiber: /fiber[:\s]*(\d+(?:\.\d+)?)\s*g/i
+        protein: /protein[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        carbs: /(?:carbs?|carbohydrates?|carb)[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        fat: /(?:fat|fats?)[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        fiber: /fiber[:\s]*(\d+(?:\.\d+)?)\s*g?/i
       },
       ingredients: /(?:ingredients?|ingredient list)[:\s]*\n((?:.*\n?)*?)(?=(?:directions?|instructions?|method)[:\s]*|$)/im,
       directions: /(?:directions?|instructions?|method)[:\s]*\n((?:.*\n?)*?)$/im
@@ -147,31 +147,104 @@ export class RecipeParser {
 
   extractMacros(text) {
     const macros = {};
+    console.log('Extracting macros from text...');
     
-    for (const [macro, pattern] of Object.entries(this.patterns.macros)) {
-      const match = text.match(pattern);
-      if (match) {
-        macros[macro] = parseFloat(match[1]);
+    // Try multiple strategies for each macro
+    const macroPatterns = {
+      calories: [
+        /(?:calories?|kcal)[:\s]*(\d+(?:\.\d+)?)/i,
+        /(\d+(?:\.\d+)?)\s*(?:calories?|kcal)/i,
+        /cal[:\s]*(\d+(?:\.\d+)?)/i
+      ],
+      protein: [
+        /protein[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        /(\d+(?:\.\d+)?)\s*g?\s*protein/i,
+        /prot[:\s]*(\d+(?:\.\d+)?)/i
+      ],
+      carbs: [
+        /(?:carbs?|carbohydrates?|carb)[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        /(\d+(?:\.\d+)?)\s*g?\s*(?:carbs?|carbohydrates?)/i,
+        /cho[:\s]*(\d+(?:\.\d+)?)/i
+      ],
+      fat: [
+        /(?:fat|fats?)[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        /(\d+(?:\.\d+)?)\s*g?\s*(?:fat|fats?)/i,
+        /lipid[:\s]*(\d+(?:\.\d+)?)/i
+      ],
+      fiber: [
+        /fiber[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
+        /(\d+(?:\.\d+)?)\s*g?\s*fiber/i,
+        /fibre[:\s]*(\d+(?:\.\d+)?)/i
+      ]
+    };
+    
+    for (const [macro, patterns] of Object.entries(macroPatterns)) {
+      let found = false;
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) {
+          macros[macro] = parseFloat(match[1]);
+          console.log(`Found ${macro}: ${macros[macro]} using pattern: ${pattern}`);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        console.log(`No ${macro} found in text`);
       }
     }
     
+    console.log('Final macros:', macros);
     return macros;
   }
 
   extractIngredients(text) {
-    const ingredientMatch = text.match(this.patterns.ingredients);
+    console.log('Extracting ingredients...');
     
-    if (!ingredientMatch) {
-      // Fallback: look for lines that look like ingredients
-      return this.extractIngredientsFallback(text);
+    // Try multiple strategies to find ingredients section
+    const strategies = [
+      // Strategy 1: Look for "Ingredients:" followed by content
+      () => {
+        const match = text.match(/(?:ingredients?|ingredient list)[:\s]*([^]*?)(?=(?:directions?|instructions?|method|preparation)[:\s]*|$)/im);
+        if (match) {
+          console.log('Found ingredients using strategy 1 (section-based)');
+          return this.parseIngredientText(match[1]);
+        }
+        return null;
+      },
+      
+      // Strategy 2: Look for ingredients without explicit section headers
+      () => {
+        console.log('Trying fallback ingredient extraction...');
+        return this.extractIngredientsFallback(text);
+      }
+    ];
+    
+    for (const strategy of strategies) {
+      const result = strategy();
+      if (result && result.length > 0) {
+        console.log(`Found ${result.length} ingredients`);
+        return result;
+      }
     }
     
-    const ingredientText = ingredientMatch[1];
-    const ingredients = ingredientText
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0 && this.looksLikeIngredient(line))
-      .map(line => this.cleanIngredient(line));
+    console.log('No ingredients found');
+    return [];
+  }
+
+  parseIngredientText(ingredientText) {
+    console.log('Parsing ingredient text:', ingredientText.substring(0, 200));
+    
+    // Split by various delimiters that might separate ingredients in PDFs
+    const lines = ingredientText.split(/[\n\r]|(?:\s{3,})/);
+    
+    const ingredients = [];
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (cleanLine.length > 2 && this.looksLikeIngredient(cleanLine)) {
+        ingredients.push(this.cleanIngredient(cleanLine));
+      }
+    }
     
     return ingredients;
   }
@@ -256,21 +329,68 @@ export class RecipeParser {
   }
 
   extractDirections(text) {
-    const directionMatch = text.match(this.patterns.directions);
+    console.log('Extracting directions...');
     
-    if (!directionMatch) {
-      // Fallback: look for content after ingredients
-      return this.extractDirectionsFallback(text);
+    // Try multiple strategies to find directions
+    const strategies = [
+      // Strategy 1: Look for explicit directions section
+      () => {
+        const match = text.match(/(?:directions?|instructions?|method|preparation)[:\s]*([^]*?)$/im);
+        if (match) {
+          console.log('Found directions using strategy 1 (section-based)');
+          return this.parseDirectionText(match[1]);
+        }
+        return null;
+      },
+      
+      // Strategy 2: Look for directions after ingredients
+      () => {
+        const match = text.match(/(?:ingredients?[^]*?)(?:directions?|instructions?|method|preparation)[:\s]*([^]*?)$/im);
+        if (match) {
+          console.log('Found directions using strategy 2 (after ingredients)');
+          return this.parseDirectionText(match[1]);
+        }
+        return null;
+      },
+      
+      // Strategy 3: Fallback method
+      () => {
+        console.log('Trying fallback direction extraction...');
+        return this.extractDirectionsFallback(text);
+      }
+    ];
+    
+    for (const strategy of strategies) {
+      const result = strategy();
+      if (result && result.length > 0) {
+        console.log(`Found ${result.length} direction steps`);
+        return result;
+      }
     }
     
-    const directionText = directionMatch[1];
-    const directions = directionText
-      .split(/\n\s*\n|\d+\./)
-      .map(step => step.trim())
-      .filter(step => step.length > 10)
-      .map((step, index) => `${index + 1}. ${step}`);
+    console.log('No directions found');
+    return [];
+  }
+
+  parseDirectionText(directionText) {
+    console.log('Parsing direction text:', directionText.substring(0, 200));
     
-    return directions;
+    // Split by numbered steps or paragraph breaks
+    let steps = directionText.split(/(?:\d+\.\s*|\n\s*\n)/);
+    
+    // Clean and filter steps
+    steps = steps
+      .map(step => step.trim())
+      .filter(step => step.length > 10 && !this.looksLikeMacro(step))
+      .map((step, index) => {
+        // Add step numbers if not present
+        if (!/^\d+\./.test(step)) {
+          return `${index + 1}. ${step}`;
+        }
+        return step;
+      });
+    
+    return steps;
   }
 
   extractDirectionsFallback(text) {
