@@ -395,6 +395,9 @@
                 <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
                     Choose PDF File
                 </button>
+                <button class="upload-btn" onclick="debugExtractText()" style="background-color: #17a2b8;">
+                    Debug: Extract Raw Text
+                </button>
             </div>
 
             <div class="processing" id="processing">
@@ -709,6 +712,94 @@
             if (event.target === modal) {
                 modal.style.display = 'none';
             }
+        }
+
+        async function debugExtractText() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showError('Please select a PDF file first.');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('pdf', file);
+
+            showProcessing();
+            clearMessages();
+
+            try {
+                const response = await fetch('/api/debug/extract-text', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Generate debug text and download as file
+                    const debugText = generateDebugText(result.pages);
+                    downloadTextFile(debugText, 'debug.txt');
+                    
+                    showSuccess(`Extracted text from ${result.pages.length} pages! Debug file downloaded as debug.txt`);
+                } else {
+                    showError(result.error || 'Failed to extract text');
+                }
+            } catch (error) {
+                showError('Error extracting text: ' + error.message);
+            }
+
+            hideProcessing();
+        }
+
+        function generateDebugText(pages) {
+            let debugText = `PDF DEBUG REPORT\n`;
+            debugText += `Generated: ${new Date().toISOString()}\n`;
+            debugText += `Total Pages: ${pages.length}\n`;
+            debugText += `${'='.repeat(80)}\n\n`;
+
+            pages.forEach(page => {
+                debugText += `PAGE ${page.pageNumber}\n`;
+                debugText += `${'='.repeat(40)}\n`;
+                debugText += `Items: ${page.itemCount} | Text Length: ${page.textLength} characters\n`;
+                debugText += `Has Ingredients: ${page.hasIngredients}\n`;
+                debugText += `Has Directions: ${page.hasDirections}\n`;
+                debugText += `Has Macros: ${page.hasMacros}\n\n`;
+                
+                debugText += `RAW TEXT (as used by parser):\n`;
+                debugText += `${'-'.repeat(40)}\n`;
+                debugText += `${page.rawText}\n\n`;
+                
+                debugText += `LINE-ORGANIZED TEXT:\n`;
+                debugText += `${'-'.repeat(40)}\n`;
+                page.lineOrganized.forEach((line, index) => {
+                    debugText += `${index + 1}: ${line}\n`;
+                });
+                debugText += `\n`;
+                
+                debugText += `RAW ITEMS (first 10 with positions):\n`;
+                debugText += `${'-'.repeat(40)}\n`;
+                page.rawItems.slice(0, 10).forEach((item, index) => {
+                    debugText += `${index + 1}: "${item.text}" (x:${item.x.toFixed(1)}, y:${item.y.toFixed(1)})\n`;
+                });
+                
+                debugText += `\n${'='.repeat(80)}\n\n`;
+            });
+
+            return debugText;
+        }
+
+        function downloadTextFile(text, filename) {
+            const blob = new Blob([text], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
     </script>
 </body>

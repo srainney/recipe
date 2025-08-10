@@ -61,6 +61,107 @@ export class RecipeParser {
     }
   }
 
+  async extractRawTextDebug(buffer) {
+    try {
+      console.log('Extracting raw text for debugging...');
+      
+      // Convert buffer to Uint8Array for pdfjs-dist
+      const data = new Uint8Array(buffer);
+      
+      // Load PDF document
+      const loadingTask = pdfjsLib.getDocument({ data: data });
+      const pdf = await loadingTask.promise;
+      
+      console.log(`PDF loaded with ${pdf.numPages} pages for debug extraction`);
+      
+      const pages = [];
+      
+      // Extract text from each page
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        
+        // Get raw text items with positioning info
+        const rawItems = textContent.items.map(item => ({
+          text: item.str,
+          x: item.transform[4],
+          y: item.transform[5],
+          width: item.width,
+          height: item.height
+        }));
+        
+        // Combine text items into different formats for analysis
+        const simpleText = textContent.items.map(item => item.str).join(' ');
+        const spacedText = textContent.items.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim();
+        const lineBasedText = this.organizeTextByLines(textContent.items);
+        
+        pages.push({
+          pageNumber: pageNum,
+          rawText: spacedText,
+          simpleJoin: simpleText,
+          lineOrganized: lineBasedText,
+          rawItems: rawItems,
+          itemCount: textContent.items.length,
+          textLength: spacedText.length,
+          // Add some analysis
+          hasIngredients: /ingredients?/i.test(spacedText),
+          hasDirections: /(?:directions?|instructions?|method)/i.test(spacedText),
+          hasMacros: /(?:calories?|protein|carbs?|fat)/i.test(spacedText)
+        });
+      }
+      
+      return pages;
+    } catch (error) {
+      console.error('Error extracting raw text:', error);
+      throw new Error(`Failed to extract raw text: ${error.message}`);
+    }
+  }
+
+  organizeTextByLines(textItems) {
+    // Group text items by approximate Y position (line)
+    const lines = [];
+    const tolerance = 5; // pixels
+    
+    textItems.forEach(item => {
+      const y = item.transform[5];
+      let lineFound = false;
+      
+      for (const line of lines) {
+        if (Math.abs(line.y - y) <= tolerance) {
+          line.items.push({
+            text: item.str,
+            x: item.transform[4]
+          });
+          lineFound = true;
+          break;
+        }
+      }
+      
+      if (!lineFound) {
+        lines.push({
+          y: y,
+          items: [{
+            text: item.str,
+            x: item.transform[4]
+          }]
+        });
+      }
+    });
+    
+    // Sort lines by Y position (top to bottom)
+    lines.sort((a, b) => b.y - a.y);
+    
+    // Sort items within each line by X position (left to right)
+    lines.forEach(line => {
+      line.items.sort((a, b) => a.x - b.x);
+    });
+    
+    // Convert to text lines
+    return lines.map(line => 
+      line.items.map(item => item.text).join(' ').trim()
+    ).filter(line => line.length > 0);
+  }
+
   parseRecipe(pageText, pageNumber) {
     try {
       console.log(`Processing page ${pageNumber}, text length: ${pageText.length}`);

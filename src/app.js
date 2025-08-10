@@ -65,6 +65,30 @@ app.post('/api/upload', upload.single('pdf'), async (req, res) => {
   }
 });
 
+// Debug endpoint to extract raw text from PDF pages
+app.post('/api/debug/extract-text', upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    console.log('Extracting raw text for debugging...');
+    const textData = await recipeParser.extractRawTextDebug(req.file.buffer);
+    
+    res.json({
+      success: true,
+      message: `Extracted text from ${textData.length} pages`,
+      pages: textData
+    });
+  } catch (error) {
+    console.error('Error extracting text:', error);
+    res.status(500).json({ 
+      error: 'Failed to extract text', 
+      details: error.message 
+    });
+  }
+});
+
 // Export selected recipes to MacroFactor format
 app.post('/api/export/macrofactor', async (req, res) => {
   try {
