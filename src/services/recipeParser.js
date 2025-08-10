@@ -33,8 +33,11 @@ export class RecipeParser {
       
       const recipes = [];
       
-      // Extract text from each page
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      // Extract text from each page (skip pages 1-22 which are intro/table of contents)
+      const startPage = 23; // Start from page 23 where recipes likely begin
+      console.log(`Skipping pages 1-${startPage - 1}, processing pages ${startPage}-${pdf.numPages}`);
+      
+      for (let pageNum = startPage; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
@@ -76,8 +79,11 @@ export class RecipeParser {
       
       const pages = [];
       
-      // Extract text from each page
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      // Extract text from each page (skip pages 1-22 which are intro/table of contents)
+      const startPage = 23; // Start from page 23 where recipes likely begin
+      console.log(`Debug extraction: Skipping pages 1-${startPage - 1}, processing pages ${startPage}-${pdf.numPages}`);
+      
+      for (let pageNum = startPage; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
@@ -211,35 +217,51 @@ export class RecipeParser {
   extractTitle(text) {
     console.log('Extracting title from text...');
     
-    // Split by common delimiters that might separate text in PDFs
+    // For this cookbook format, the title is usually the first line or at the very beginning
     const lines = text.split(/[\n\r]|(?:\s{3,})/);
     
-    // Try the first non-empty line as title
+    // Strategy 1: Look for the first meaningful line that looks like a recipe title
     for (const line of lines) {
       const cleanLine = line.trim();
       if (cleanLine && 
           !cleanLine.toLowerCase().includes('calories') &&
           !cleanLine.toLowerCase().includes('protein') &&
           !cleanLine.toLowerCase().includes('ingredients') &&
-          !cleanLine.toLowerCase().includes('directions') &&
           !cleanLine.toLowerCase().includes('instructions') &&
-          cleanLine.length > 2 && 
+          !cleanLine.toLowerCase().includes('directions') &&
+          !cleanLine.toLowerCase().includes('per serving') &&
+          !cleanLine.toLowerCase().includes('makes') &&
+          !cleanLine.toLowerCase().includes('back to table') &&
+          cleanLine.length > 5 && 
           cleanLine.length < 100 &&
-          !/^\d+/.test(cleanLine)) { // Don't start with numbers
+          !/^\d+/.test(cleanLine) && // Don't start with numbers
+          !cleanLine.includes('g ') && // Avoid macro lines
+          !/^\w+:/.test(cleanLine) && // Avoid ingredient section headers like "Chicken:"
+          cleanLine.split(' ').length > 1) { // Must be multiple words
         console.log('Found title:', cleanLine);
         return cleanLine;
       }
     }
     
-    // Fallback: look for text before common recipe keywords
-    const beforeIngredients = text.split(/ingredients?|ingredient list/i)[0];
-    if (beforeIngredients && beforeIngredients.length < 200) {
-      const words = beforeIngredients.trim().split(/\s+/);
-      if (words.length > 1 && words.length < 20) {
-        const title = words.join(' ').trim();
-        console.log('Fallback title:', title);
-        return title;
+    // Strategy 2: Take the very first substantial text before any structural elements
+    const words = text.split(/\s+/);
+    const titleWords = [];
+    
+    for (const word of words) {
+      // Stop when we hit structural elements or ingredients
+      if (/^(chicken|sauce|rice|ingredients|instructions|per|serving|makes|calories|protein|carbs|fat|garnish|marinade):/i.test(word) ||
+          /^(ingredients|instructions|directions)$/i.test(word)) {
+        break;
       }
+      titleWords.push(word);
+      // Stop if we have enough words for a title
+      if (titleWords.length >= 8) break;
+    }
+    
+    if (titleWords.length >= 2) {
+      const title = titleWords.join(' ').trim();
+      console.log('Extracted title from beginning:', title);
+      return title;
     }
     
     console.log('No title found');
@@ -250,31 +272,31 @@ export class RecipeParser {
     const macros = {};
     console.log('Extracting macros from text...');
     
-    // Try multiple strategies for each macro
+    // Try multiple strategies for each macro - updated for this cookbook's format
     const macroPatterns = {
       calories: [
+        /(\d+(?:\.\d+)?)\s*calories?/i,
         /(?:calories?|kcal)[:\s]*(\d+(?:\.\d+)?)/i,
-        /(\d+(?:\.\d+)?)\s*(?:calories?|kcal)/i,
         /cal[:\s]*(\d+(?:\.\d+)?)/i
       ],
       protein: [
-        /protein[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
         /(\d+(?:\.\d+)?)\s*g?\s*protein/i,
+        /protein[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
         /prot[:\s]*(\d+(?:\.\d+)?)/i
       ],
       carbs: [
+        /(\d+(?:\.\d+)?)\s*g?\s*carbs?/i,
         /(?:carbs?|carbohydrates?|carb)[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
-        /(\d+(?:\.\d+)?)\s*g?\s*(?:carbs?|carbohydrates?)/i,
         /cho[:\s]*(\d+(?:\.\d+)?)/i
       ],
       fat: [
+        /(\d+(?:\.\d+)?)\s*g?\s*fat/i,
         /(?:fat|fats?)[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
-        /(\d+(?:\.\d+)?)\s*g?\s*(?:fat|fats?)/i,
         /lipid[:\s]*(\d+(?:\.\d+)?)/i
       ],
       fiber: [
-        /fiber[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
         /(\d+(?:\.\d+)?)\s*g?\s*fiber/i,
+        /fiber[:\s]*(\d+(?:\.\d+)?)\s*g?/i,
         /fibre[:\s]*(\d+(?:\.\d+)?)/i
       ]
     };
@@ -304,9 +326,9 @@ export class RecipeParser {
     
     // Try multiple strategies to find ingredients section
     const strategies = [
-      // Strategy 1: Look for "Ingredients:" followed by content
+      // Strategy 1: Look for text between "ingredients" and "instructions" 
       () => {
-        const match = text.match(/(?:ingredients?|ingredient list)[:\s]*([^]*?)(?=(?:directions?|instructions?|method|preparation)[:\s]*|$)/im);
+        const match = text.match(/(?:ingredients)[:\s]*([^]*?)(?=(?:instructions?|directions?)[:\s]*|$)/im);
         if (match) {
           console.log('Found ingredients using strategy 1 (section-based)');
           return this.parseIngredientText(match[1]);
@@ -314,7 +336,13 @@ export class RecipeParser {
         return null;
       },
       
-      // Strategy 2: Look for ingredients without explicit section headers
+      // Strategy 2: Extract from the specific structure of this cookbook
+      () => {
+        console.log('Trying cookbook-specific ingredient extraction...');
+        return this.extractIngredientsFromCookbookFormat(text);
+      },
+      
+      // Strategy 3: Look for ingredients without explicit section headers
       () => {
         console.log('Trying fallback ingredient extraction...');
         return this.extractIngredientsFallback(text);
@@ -331,6 +359,126 @@ export class RecipeParser {
     
     console.log('No ingredients found');
     return [];
+  }
+
+  extractIngredientsFromCookbookFormat(text) {
+    const ingredients = [];
+    
+    // In this cookbook, ingredients appear BEFORE the word "ingredients", structured as:
+    // Title + Ingredient sections (Chicken: ..., Sauce: ..., etc.) + "ingredients instructions"
+    
+    const beforeIngredients = text.split(/\bingredients\b/i)[0];
+    if (!beforeIngredients) return [];
+    
+    console.log('Analyzing text before "ingredients" keyword:', beforeIngredients.substring(0, 200));
+    
+    // Remove the title part and macros part
+    let ingredientText = beforeIngredients;
+    
+    // Remove common title patterns and macro patterns
+    ingredientText = ingredientText.replace(/^[^:]+(?:bowls?|recipe|dish)/i, '');
+    ingredientText = ingredientText.replace(/\d+\s*calories|\d+g?\s*protein|\d+g?\s*carbs|\d+g?\s*fat|\d+g?\s*fiber/gi, '');
+    ingredientText = ingredientText.replace(/per serving|makes \d+/gi, '');
+    
+    // Split by known section headers and extract ingredients
+    const sections = ingredientText.split(/\b(chicken|sauce|marinade|garnish|rice|pork|beef|vegetables?|seasoning):/gi);
+    
+    for (let i = 1; i < sections.length; i += 2) {
+      const sectionName = sections[i];
+      const sectionContent = sections[i + 1] || '';
+      
+      console.log(`Processing section: ${sectionName}`);
+      console.log(`Section content: ${sectionContent.substring(0, 100)}`);
+      
+      // Extract ingredients from this section
+      const sectionIngredients = this.parseIngredientSection(sectionContent, sectionName);
+      ingredients.push(...sectionIngredients);
+    }
+    
+    // Also try to extract any ingredients that might not be in sections
+    if (ingredients.length === 0) {
+      console.log('No sectioned ingredients found, trying pattern matching...');
+      const patternIngredients = this.extractIngredientsByPattern(beforeIngredients);
+      ingredients.push(...patternIngredients);
+    }
+    
+    return ingredients.filter(ing => ing.length > 3);
+  }
+
+  parseIngredientSection(content, sectionName) {
+    const ingredients = [];
+    
+    // Clean up the content
+    let cleanContent = content.trim();
+    
+    // Split by measurement patterns to find individual ingredients
+    const measurementPattern = /(\d+g?\s*\([^)]+\)|^\d+g?\s|\d+\s*(?:cup|tbsp|tsp|oz|lb|lbs|packets?)\s)/gi;
+    
+    let parts = cleanContent.split(measurementPattern).filter(p => p && p.trim());
+    
+    console.log(`Section ${sectionName} parts:`, parts.slice(0, 5));
+    
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i].trim();
+      
+      // If this looks like a measurement, combine with next part
+      if (measurementPattern.test(part) && i + 1 < parts.length) {
+        const nextPart = parts[i + 1].trim();
+        let ingredient = `${part} ${nextPart}`.trim();
+        
+        // Clean up the ingredient - stop at common break points
+        ingredient = ingredient.split(/\s+(?:per|makes|calories|protein|carbs|fat|garnish|rice|sauce|chicken|marinade)[:]/i)[0];
+        ingredient = ingredient.split(/\s+(?:green|red|white|black)\s+(?=\w+:)/i)[0]; // Stop at "Green Chile:" etc
+        ingredient = ingredient.split(/\s+(?:pico|mix|cheesy)[:]/i)[0]; // Stop at section breaks
+        
+        // Clean up the ingredient
+        const cleanIngredient = ingredient
+          .replace(/\s+/g, ' ')
+          .replace(/,$/, '')
+          .trim();
+          
+        if (cleanIngredient.length > 3 && this.looksLikeIngredient(cleanIngredient)) {
+          // Further clean up to remove trailing section names
+          const finalIngredient = cleanIngredient.replace(/\s+(chicken|sauce|garnish|rice|marinade|mix)\s*$/i, '').trim();
+          if (finalIngredient.length > 3) {
+            ingredients.push(finalIngredient);
+            console.log(`Found ingredient: ${finalIngredient}`);
+          }
+        }
+        i++; // Skip the next part since we used it
+      }
+    }
+    
+    return ingredients;
+  }
+
+  extractIngredientsByPattern(text) {
+    const ingredients = [];
+    
+    // Look for measurement + ingredient patterns
+    const patterns = [
+      /(\d+g?\s*\([^)]+\)\s+[^.]+?)(?=\s+\d+g?\s*\(|\s+[A-Z][^:]+:|\s+ingredients|\s+instructions|$)/g,
+      /(\d+g?\s+[^.]+?)(?=\s+\d+g?|\s+[A-Z][^:]+:|\s+ingredients|\s+instructions|$)/g,
+      /(\d+\s*(?:cup|tbsp|tsp|oz|lb|lbs|packets?)\s+[^.]+?)(?=\s+\d+|\s+[A-Z][^:]+:|\s+ingredients|\s+instructions|$)/g
+    ];
+    
+    for (const pattern of patterns) {
+      const matches = [...text.matchAll(pattern)];
+      for (const match of matches) {
+        const ingredient = match[1].trim().replace(/,$/, '');
+        if (ingredient.length > 3 && this.looksLikeIngredient(ingredient)) {
+          ingredients.push(ingredient);
+          console.log(`Pattern found ingredient: ${ingredient}`);
+        }
+      }
+    }
+    
+    return ingredients;
+  }
+
+  isIngredientWord(word) {
+    const ingredientWords = /^(chicken|pork|beef|fish|rice|pasta|onion|garlic|oil|butter|salt|pepper|sugar|flour|egg|milk|cheese|tomato|potato|carrot|broccoli|spinach|lettuce|bread|water|juice|wine|stock|broth|sauce|miso|peanut|soy|maple|syrup|vinegar|ginger|sesame|seeds|thighs|boneless|skinless|white|green|bone|chili|flakes|black|paste|cup|tbsp|tsp|oz|lb|lbs|grams?|cups?|tablespoons?|teaspoons?|ounces?|pounds?)$/i;
+    return ingredientWords.test(word.replace(/[^\w]/g, ''));
   }
 
   parseIngredientText(ingredientText) {

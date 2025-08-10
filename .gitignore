@@ -42,6 +42,9 @@ jspm_packages/
 logs
 *.log
 
+# Debug output files
+debug.txt
+
 # OS generated files
 .DS_Store
 .DS_Store?
