@@ -63,6 +63,9 @@ export class RecipeParser {
 
   parseRecipe(pageText, pageNumber) {
     try {
+      console.log(`Processing page ${pageNumber}, text length: ${pageText.length}`);
+      console.log(`Page ${pageNumber} text preview:`, pageText.substring(0, 200) + '...');
+      
       const recipe = {
         id: uuidv4(),
         pageNumber: pageNumber,
@@ -73,10 +76,28 @@ export class RecipeParser {
         originalText: pageText.trim()
       };
 
-      // Validate that we have essential components
-      if (!recipe.title || recipe.ingredients.length === 0) {
-        console.warn(`Page ${pageNumber}: Missing essential recipe components`);
+      console.log(`Page ${pageNumber} extracted:`, {
+        title: recipe.title,
+        macrosCount: Object.keys(recipe.macros).length,
+        ingredientsCount: recipe.ingredients.length,
+        directionsCount: recipe.directions.length
+      });
+
+      // More flexible validation - require either title OR ingredients
+      if (!recipe.title && recipe.ingredients.length === 0) {
+        console.warn(`Page ${pageNumber}: No title or ingredients found`);
         return null;
+      }
+
+      // If no title, create one from page number
+      if (!recipe.title) {
+        recipe.title = `Recipe from Page ${pageNumber}`;
+      }
+
+      // If no ingredients but has other content, try alternative extraction
+      if (recipe.ingredients.length === 0 && pageText.length > 100) {
+        recipe.ingredients = this.extractIngredientsAlternative(pageText);
+        console.log(`Page ${pageNumber} alternative ingredients:`, recipe.ingredients.length);
       }
 
       return recipe;
@@ -87,7 +108,10 @@ export class RecipeParser {
   }
 
   extractTitle(text) {
-    const lines = text.trim().split('\n');
+    console.log('Extracting title from text...');
+    
+    // Split by common delimiters that might separate text in PDFs
+    const lines = text.split(/[\n\r]|(?:\s{3,})/);
     
     // Try the first non-empty line as title
     for (const line of lines) {
@@ -96,13 +120,29 @@ export class RecipeParser {
           !cleanLine.toLowerCase().includes('calories') &&
           !cleanLine.toLowerCase().includes('protein') &&
           !cleanLine.toLowerCase().includes('ingredients') &&
+          !cleanLine.toLowerCase().includes('directions') &&
+          !cleanLine.toLowerCase().includes('instructions') &&
           cleanLine.length > 2 && 
-          cleanLine.length < 100) {
+          cleanLine.length < 100 &&
+          !/^\d+/.test(cleanLine)) { // Don't start with numbers
+        console.log('Found title:', cleanLine);
         return cleanLine;
       }
     }
     
-    return `Recipe from Page ${this.pageNumber || 'Unknown'}`;
+    // Fallback: look for text before common recipe keywords
+    const beforeIngredients = text.split(/ingredients?|ingredient list/i)[0];
+    if (beforeIngredients && beforeIngredients.length < 200) {
+      const words = beforeIngredients.trim().split(/\s+/);
+      if (words.length > 1 && words.length < 20) {
+        const title = words.join(' ').trim();
+        console.log('Fallback title:', title);
+        return title;
+      }
+    }
+    
+    console.log('No title found');
+    return null;
   }
 
   extractMacros(text) {
@@ -165,17 +205,47 @@ export class RecipeParser {
   looksLikeIngredient(line) {
     if (!line || line.length < 3) return false;
     
+    console.log('Checking if ingredient:', line.substring(0, 50));
+    
     // Common ingredient patterns
     const ingredientPatterns = [
       /^\d+/, // Starts with number
-      /\d+\s*(?:cup|cups|tbsp|tsp|oz|lb|g|kg|ml|l)/i, // Contains measurements
+      /\d+\s*(?:cup|cups|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lb|lbs|pounds?|g|grams?|kg|ml|liters?|l)\b/i, // Contains measurements
       /^\*/, // Bulleted
       /^-/, // Dashed
+      /^•/, // Bullet point
       /^\d+\./, // Numbered list
+      /^\w+:/, // Word followed by colon (like "Chicken:")
     ];
     
-    return ingredientPatterns.some(pattern => pattern.test(line)) ||
-           (line.includes(' ') && !line.includes(':') && line.length < 150);
+    // Check explicit patterns first
+    const hasPattern = ingredientPatterns.some(pattern => pattern.test(line));
+    if (hasPattern) {
+      console.log('Ingredient pattern match:', line.substring(0, 30));
+      return true;
+    }
+    
+    // More flexible check for ingredient-like content
+    const words = line.split(/\s+/);
+    const hasCommonIngredients = /\b(?:chicken|beef|pork|fish|rice|pasta|onion|garlic|oil|butter|salt|pepper|sugar|flour|egg|milk|cheese|tomato|potato|carrot|broccoli|spinach|lettuce|bread|water|juice|wine|stock|broth)\b/i.test(line);
+    
+    if (hasCommonIngredients && words.length < 15) {
+      console.log('Common ingredient found:', line.substring(0, 30));
+      return true;
+    }
+    
+    // Check if it's a reasonable length and has spaces (multi-word ingredient)
+    const isReasonableLength = line.length >= 5 && line.length < 150;
+    const hasSpaces = line.includes(' ');
+    const notTooManyWords = words.length < 20;
+    const noColons = !line.includes(':') || line.split(':').length === 2;
+    
+    const result = isReasonableLength && hasSpaces && notTooManyWords && noColons;
+    if (result) {
+      console.log('General ingredient match:', line.substring(0, 30));
+    }
+    
+    return result;
   }
 
   cleanIngredient(ingredient) {
@@ -234,5 +304,51 @@ export class RecipeParser {
     }
     
     return directions.map((step, index) => `${index + 1}. ${step}`);
+  }
+
+  extractIngredientsAlternative(text) {
+    console.log('Using alternative ingredient extraction...');
+    
+    // Split text into potential ingredient lines
+    const lines = text.split(/[\n\r]|(?:\s{3,})/);
+    const ingredients = [];
+    
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      
+      // Skip empty lines and very short lines
+      if (!cleanLine || cleanLine.length < 3) continue;
+      
+      // Skip lines that look like titles, macros, or directions
+      if (this.looksLikeTitle(cleanLine) || 
+          this.looksLikeMacro(cleanLine) || 
+          this.looksLikeDirection(cleanLine)) {
+        continue;
+      }
+      
+      // Check if line looks like an ingredient
+      if (this.looksLikeIngredient(cleanLine)) {
+        ingredients.push(this.cleanIngredient(cleanLine));
+      }
+    }
+    
+    console.log('Alternative extraction found:', ingredients.length, 'ingredients');
+    return ingredients;
+  }
+
+  looksLikeTitle(line) {
+    return line.length < 100 && 
+           !line.includes(' ') === false && 
+           !/\d/.test(line) && 
+           line.split(' ').length < 10;
+  }
+
+  looksLikeMacro(line) {
+    return /(?:calories?|protein|carbs?|fat|fiber)[:\s]*\d+/i.test(line);
+  }
+
+  looksLikeDirection(line) {
+    return /^(?:\d+\.|\d+\))\s/.test(line) || 
+           /\b(?:heat|cook|bake|mix|stir|add|place|remove)\b/i.test(line);
   }
 }
