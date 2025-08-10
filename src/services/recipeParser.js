@@ -1,4 +1,4 @@
-import pdfParse from 'pdf-parse';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 import { v4 as uuidv4 } from 'uuid';
 
 export class RecipeParser {
@@ -21,16 +21,28 @@ export class RecipeParser {
   async parsePDF(buffer) {
     try {
       console.log('Parsing PDF buffer...');
-      const data = await pdfParse(buffer);
-      const pages = this.splitIntoPages(data.text);
       
-      console.log(`Found ${pages.length} pages`);
+      // Load PDF document
+      const loadingTask = pdfjsLib.getDocument({ data: buffer });
+      const pdf = await loadingTask.promise;
+      
+      console.log(`PDF loaded with ${pdf.numPages} pages`);
       
       const recipes = [];
-      for (let i = 0; i < pages.length; i++) {
-        const recipe = this.parseRecipe(pages[i], i + 1);
-        if (recipe && recipe.title) {
-          recipes.push(recipe);
+      
+      // Extract text from each page
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        
+        // Combine text items into a single string
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        
+        if (pageText.trim().length > 50) {
+          const recipe = this.parseRecipe(pageText, pageNum);
+          if (recipe && recipe.title) {
+            recipes.push(recipe);
+          }
         }
       }
       
@@ -40,16 +52,6 @@ export class RecipeParser {
       console.error('Error parsing PDF:', error);
       throw new Error(`Failed to parse PDF: ${error.message}`);
     }
-  }
-
-  splitIntoPages(text) {
-    // Split by form feed characters or multiple newlines that typically separate pages
-    let pages = text.split(/\f|\n\s*\n\s*\n/);
-    
-    // Filter out empty or very short pages
-    pages = pages.filter(page => page.trim().length > 50);
-    
-    return pages;
   }
 
   parseRecipe(pageText, pageNumber) {
