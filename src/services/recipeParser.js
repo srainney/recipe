@@ -1,4 +1,4 @@
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import pdfjsLib from 'pdfjs-dist';
 import { v4 as uuidv4 } from 'uuid';
 
 export class RecipeParser {
@@ -22,8 +22,11 @@ export class RecipeParser {
     try {
       console.log('Parsing PDF buffer...');
       
+      // Convert buffer to Uint8Array for pdfjs-dist
+      const data = new Uint8Array(buffer);
+      
       // Load PDF document
-      const loadingTask = pdfjsLib.getDocument({ data: buffer });
+      const loadingTask = pdfjsLib.getDocument({ data: data });
       const pdf = await loadingTask.promise;
       
       console.log(`PDF loaded with ${pdf.numPages} pages`);
@@ -35,10 +38,14 @@ export class RecipeParser {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Combine text items into a single string
-        const pageText = textContent.items.map(item => item.str).join(' ');
+        // Combine text items into a single string with proper spacing
+        const pageText = textContent.items
+          .map(item => item.str)
+          .join(' ')
+          .replace(/\s+/g, ' ') // Normalize whitespace
+          .trim();
         
-        if (pageText.trim().length > 50) {
+        if (pageText.length > 50) {
           const recipe = this.parseRecipe(pageText, pageNum);
           if (recipe && recipe.title) {
             recipes.push(recipe);
